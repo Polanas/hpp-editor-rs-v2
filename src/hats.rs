@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use downcast_rs::{Downcast, impl_downcast};
 use eframe::{glow, icon_data::from_png_bytes};
 use pixas::bitmap::Bitmap;
@@ -266,11 +266,12 @@ impl_load_hat_element!(@anims FlyingPet);
 impl_load_hat_element!(@anims WalkingPet);
 impl_load_hat_element!(@manual ExtraHat, ExtraHatData);
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Hat {
     elements: HashMap<HatElementId, Box<dyn HatElement>>,
-    path: Option<PathBuf>,
-    name: Option<String>,
+    path: PathBuf,
+    name: String,
+    name_set_by_user: bool,
 }
 
 macro_rules! hat_by_type_def {
@@ -289,25 +290,19 @@ macro_rules! hat_by_type_def {
         }
     };
 }
+#[derive(Clone, Copy, Debug)]
+pub enum HatSaveType {
+    Folder,
+    File,
+}
 
 impl Hat {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_path(path: &Path) -> Self {
+    pub fn new(path: &Path, name: &str) -> Self {
         Self {
             elements: Default::default(),
-            path: Some(path.to_path_buf()),
-            name: None,
-        }
-    }
-
-    pub fn with_path_and_name(path: &Path, name: &str) -> Self {
-        Self {
-            elements: Default::default(),
-            path: Some(path.to_path_buf()),
-            name: Some(name.to_string()),
+            path: path.to_path_buf(),
+            name: name.to_string(),
+            name_set_by_user: false,
         }
     }
 
@@ -345,29 +340,36 @@ impl Hat {
         self.elements().any(|e| e.base().hat_type == hat_type)
     }
 
-    pub fn load(path: impl AsRef<Path>, gl: &eframe::glow::Context) -> Result<Self> {
+    pub fn load(path: impl AsRef<Path>, gl: &glow::Context) -> Result<Self> {
         let path = path.as_ref();
-        if !path.exists() {
-            bail!("expected path to exist: {:?}", path);
+        let src_path = path.join("src");
+        let data_path = path.join("data.json");
+        let images_path = path.join("images");
+        for path in &[path, &images_path] {
+            if !path.exists() {
+                bail!("expected {:?} to exist", path);
+            }
         }
 
-        let file = File::open(path)?;
-        let mut zip_archive = ZipArchive::new(file)?;
-        let hat_data: HatData = {
-            let mut data_json = zip_archive.by_name("data.json")?;
-            let mut data_json_string = String::new();
-            data_json.read_to_string(&mut data_json_string)?;
-            serde_json::from_str(&data_json_string)?
-        };
-        let mut hat = Hat::with_path_and_name(path, &hat_data.name);
+        let data: HatData = File::open(&data_path)
+            .context(format!("could not open {:?}", &data_path))
+            .and_then(|mut file| {
+                let mut data = String::new();
+                file.read_to_string(&mut data)
+                    .context(format!("could not read {:?}", &data_path))
+                    .map(|_| data)
+            })
+            .and_then(|data_string| {
+                serde_json::from_str(&data_string)
+                    .context(format!("could not parse {:?}", &data_path))
+            })?;
 
-        for element in hat_data.elements {
-            let image_path = element.base().local_image_path.as_ref().unwrap();
-            let index = zip_archive.index_for_path(image_path).unwrap();
-            let mut entry = zip_archive.by_index(index)?;
-            let mut data: Vec<u8> = vec![];
-            entry.read_to_end(&mut data)?;
-            let bitmap = Bitmap::from_png_bytes(&data[..], None)?;
+        let mut hat = Hat::new(path, &data.name);
+        for element in data.elements {
+            let local_image_path = element.base().local_image_path.as_ref().unwrap();
+            let image_path = images_path.join(local_image_path);
+            let bitmap = Bitmap::from_path(&image_path)
+                .context(format!("couldn not read image at {:?}", &image_path))?;
 
             match element {
                 HatElementData::Wearable(wearable_data) => {
@@ -389,13 +391,68 @@ impl Hat {
                 ),
             };
         }
-
         Ok(hat)
     }
 
+    // pub fn load_from_file(path: impl AsRef<Path>, gl: &eframe::glow::Context) -> Result<Self> {
+    //     let path = path.as_ref();
+    //     if !path.exists() {
+    //         bail!("expected path to exist: {:?}", path);
+    //     }
+    //
+    //     let file = File::open(path)?;
+    //     let mut zip_archive = ZipArchive::new(file)?;
+    //     let hat_data: HatData = {
+    //         let mut data_json = zip_archive.by_name("data.json")?;
+    //         let mut data_json_string = String::new();
+    //         data_json.read_to_string(&mut data_json_string)?;
+    //         serde_json::from_str(&data_json_string)?
+    //     };
+    //     let mut hat = Hat::with_path(path, &hat_data.name);
+    //
+    //     for element in hat_data.elements {
+    //         let image_path = element.base().local_image_path.as_ref().unwrap();
+    //         let index = zip_archive.index_for_path(image_path).unwrap();
+    //         let mut entry = zip_archive.by_index(index)?;
+    //         let mut data: Vec<u8> = vec![];
+    //         entry.read_to_end(&mut data)?;
+    //         let bitmap = Bitmap::from_png_bytes(&data[..], None)?;
+    //
+    //         match element {
+    //             HatElementData::Wearable(wearable_data) => {
+    //                 hat.add_element(WearableHat::load(wearable_data, Image::Bitmap(bitmap), gl)?)
+    //             }
+    //             HatElementData::Wings(wings_data) => {
+    //                 hat.add_element(WingsHat::load(wings_data, Image::Bitmap(bitmap), gl)?)
+    //             }
+    //             HatElementData::Extra(extra_hat_data) => {
+    //                 hat.add_element(ExtraHat::load(extra_hat_data, Image::Bitmap(bitmap), gl)?)
+    //             }
+    //             HatElementData::FlyingPet(flying_pet_data) => hat.add_element(FlyingPetHat::load(
+    //                 flying_pet_data,
+    //                 Image::Bitmap(bitmap),
+    //                 gl,
+    //             )?),
+    //             HatElementData::WalkingPet(walking_pet_data) => hat.add_element(
+    //                 WalkingPetHat::load(walking_pet_data, Image::Bitmap(bitmap), gl)?,
+    //             ),
+    //         };
+    //     }
+    //
+    //     Ok(hat)
+    // }
+
+    // pub fn save_as(&mut self) -> Result<()> {
+    //     let path = rfd::FileDialog::new()
+    //         .pick_folder()
+    //         .context("could not pick folder")?;
+    //     self.save(&path)?;
+    //     *self.path_mut() = path;
+    //     Ok(())
+    // }
+
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
-        //TODO: add contexts
-        let path = path.as_ref();
+        let path = path.as_ref().join("data.json");
         let uuid_path: PathBuf = {
             let mut path = path.to_path_buf().into_os_string();
             path.push("_");
@@ -403,47 +460,145 @@ impl Hat {
             path.into()
         };
 
-        let Some(name) = self.name() else {
-            bail!("expected hat to have a name");
-        };
-        //FOR NOW ignoring the possibility of the file already present
-        let file = File::create(&uuid_path)?;
-        let mut hat_data = HatData::new(name.to_string());
+        let mut file =
+            File::create(&uuid_path).context(format!("could not create {:?}", uuid_path))?;
 
+        let data_string = serde_json::to_string_pretty(&self.gen_hat_data(HatSaveType::Folder))
+            .context("could not generate data.json")?;
+
+        write!(file, "{}", data_string).context(format!(
+            "could not write hat data to file at {:?}",
+            &uuid_path
+        ))?;
+
+        if std::fs::exists(&path).unwrap_or(false) {
+            if let Err(err) = std::fs::remove_file(&path) {
+                std::fs::remove_file(&uuid_path)
+                    .context(format!("could not remove {:?}", &uuid_path))?;
+                return Err(err.into());
+            }
+        }
+
+        std::fs::rename(&uuid_path, path)
+            .context(format!("could not rename file: {:?}", uuid_path))?;
+        Ok(())
+    }
+    //path: idk/what/hat/images/bitmap.png
+    //ancestors:
+    //1 idk/what/hat/images/bitmap.png
+    //2 idk/what/hat/images
+    //3 idk/what/hat
+    //idk/what
+    //idk
+    //
+    //components reved:
+    //1 bitmap.png
+    //2 images/bitmap.png
+    //3 hat/images/bitmap.png
+    //...
+    pub fn gen_hat_data(&self, save_type: HatSaveType) -> HatData {
+        let mut hat_data = HatData::new(self.name().to_string());
         for element in self.elements() {
-            let local_image_path = Path::new("images").join(format!("{}.png", element.id().0));
+            let local_image_path = match save_type {
+                HatSaveType::Folder => {
+                    //TODO: account for the situation where image is NOT in images
+                    let images_path = self.path().join("images");
+                    let is_in_images_dir = images_path.ancestors().any(|path| path == images_path);
+                    assert!(is_in_images_dir);
+
+                    let image_path = element.bitmap().path().unwrap();
+                    let mut path_parts = vec![];
+                    for (component, ancestor) in
+                        images_path.components().rev().zip(images_path.ancestors())
+                    {
+                        path_parts.push(component.as_os_str().to_owned());
+                        if ancestor == images_path {
+                            break;
+                        }
+                    }
+                    image_path
+                        .iter()
+                        .rev()
+                        .fold(PathBuf::new(), |mut path, part| {
+                            path.push(part);
+                            path
+                        })
+                }
+                HatSaveType::File => Path::new("images").join(format!("{}.png", element.id().0)),
+            };
+            dbg!(&local_image_path);
             let mut element_data = element.hat_element_data_ref().to_hat_element_data();
             let base = element_data.base_mut();
             base.local_image_path = Some(local_image_path);
             assert!(base.local_image_path.is_some());
             hat_data.elements.push(element_data);
         }
+        hat_data
+    }
+
+    pub fn export_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+
+        let uuid_path: PathBuf = {
+            let mut path = path.to_path_buf().into_os_string();
+            path.push("_");
+            path.push(Uuid::new_v4().to_string());
+            path.into()
+        };
+
+        let file =
+            File::create(&uuid_path).context(format!("could not create {:?}", &uuid_path))?;
+        let hat_data = self.gen_hat_data(HatSaveType::File);
         let mut zip_writer = ZipWriter::new(file);
         let options = SimpleFileOptions::default();
 
-        zip_writer.add_directory("images", options)?;
+        zip_writer
+            .add_directory("images", options)
+            .context("could not add images directory")?;
 
         for (element_data, element) in hat_data.elements.iter().zip(self.elements()) {
             let mut bitmap_png_data = vec![];
-            element.bitmap().to_png_bytes(&mut bitmap_png_data)?;
-            zip_writer.start_file_from_path(
-                element_data.base().local_image_path.as_ref().unwrap(),
-                options,
-            )?;
-            zip_writer.write_all(&bitmap_png_data)?;
+            element
+                .bitmap()
+                .to_png_bytes(&mut bitmap_png_data)
+                .context(format!(
+                    "could not convert image at {:?} to png data",
+                    element.bitmap().path().unwrap_or(Path::new("[no path]"))
+                ))?;
+            zip_writer
+                .start_file_from_path(
+                    element_data.base().local_image_path.as_ref().unwrap(),
+                    options,
+                )
+                .context("could not start adding image file")?;
+            zip_writer
+                .write_all(&bitmap_png_data)
+                .context("could not add image file")?;
         }
 
-        zip_writer.start_file("data.json", options)?;
-        zip_writer.write_all(serde_json::to_string_pretty(&hat_data)?.as_bytes())?;
-        zip_writer.finish()?;
+        zip_writer
+            .start_file("data.json", options)
+            .context("could not start adding data.json file")?;
+        zip_writer
+            .write_all(
+                serde_json::to_string_pretty(&hat_data)
+                    .context("could not generate data.json")?
+                    .as_bytes(),
+            )
+            .context("could not write data.json")?;
+        zip_writer
+            .finish()
+            .context("could not finish writing files")?;
 
         if std::fs::exists(path).unwrap_or(false) {
             if let Err(err) = std::fs::remove_file(path) {
-                std::fs::remove_file(&uuid_path)?;
+                std::fs::remove_file(&uuid_path)
+                    .context(format!("could not remove file at {:?}", &uuid_path))?;
                 return Err(err.into());
             }
         }
-        std::fs::rename(&uuid_path, path)?;
+        std::fs::rename(&uuid_path, path)
+            .context(format!("could not rename file at {:?}", &uuid_path))?;
         Ok(())
     }
 
@@ -453,15 +608,27 @@ impl Hat {
     hat_by_type_def!(flying_pet, FlyingPetHat, HatType::FlyingPet);
     hat_by_type_def!(walking_pet, WalkingPetHat, HatType::WalkingPet);
 
-    pub fn name(&self) -> Option<&String> {
-        self.name.as_ref()
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
-    pub fn path(&self) -> Option<&PathBuf> {
-        self.path.as_ref()
-    }
-
-    pub fn path_mut(&mut self) -> &mut Option<PathBuf> {
+    pub fn path_mut(&mut self) -> &mut PathBuf {
         &mut self.path
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn name_mut(&mut self) -> &mut String {
+        &mut self.name
+    }
+
+    pub fn name_set_by_user(&self) -> bool {
+        self.name_set_by_user
+    }
+
+    pub fn name_set_by_user_mut(&mut self) -> &mut bool {
+        &mut self.name_set_by_user
     }
 }

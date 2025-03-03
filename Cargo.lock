@@ -1281,6 +1281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-modal"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3915089109907acf93b79d613b908d5c006d9c17a1bc2664606d3f4eb84e031c"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2004,12 +2013,14 @@ dependencies = [
  "derivative",
  "downcast-rs 2.0.1",
  "eframe",
+ "egui-modal",
  "egui_commonmark",
  "egui_dnd",
  "egui_dock",
  "egui_extras",
  "flexi_logger",
  "glutin",
+ "if_chain",
  "log",
  "num-derive",
  "num-traits",
@@ -2186,6 +2197,12 @@ dependencies = [
  "icu_normalizer",
  "icu_properties",
 ]
+
+[[package]]
+name = "if_chain"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb56e1aa765b4b4f3aadfab769793b7087bb03a4ea4920644a6d238e2df5b9ed"
 
 [[package]]
 name = "image"

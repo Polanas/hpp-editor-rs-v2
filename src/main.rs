@@ -1,19 +1,6 @@
-pub mod animation_window;
-pub mod animations;
-pub mod console;
-pub mod editor_app;
-pub mod file_watcher;
-pub mod files_watcher;
-pub mod hats;
-pub mod hats_data;
-pub mod image;
-pub mod shader;
-pub mod tabs;
-pub mod texture;
-pub mod ui_text;
 
-use editor_app::EditorApp;
 use eframe::egui;
+use hpp_editor_v2::editor_app::EditorApp;
 
 fn main() -> anyhow::Result<()> {
     color_backtrace::install();
@@ -24,7 +11,6 @@ fn main() -> anyhow::Result<()> {
         viewport: egui::ViewportBuilder::default().with_inner_size((1600.0, 900.0)),
         ..Default::default()
     };
-
     let _ = eframe::run_native(
         "Editor",
         native_opts,
