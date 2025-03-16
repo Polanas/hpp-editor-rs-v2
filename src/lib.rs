@@ -1,6 +1,7 @@
 #![feature(let_chains)]
-
-pub mod hat_name_getter;
+pub mod path_utils;
+pub mod catppuccin_egui;
+pub mod name_getter;
 pub mod animation_window;
 pub mod animations;
 pub mod console;

@@ -1,11 +1,9 @@
-
 use eframe::egui;
 use hpp_editor_v2::editor_app::EditorApp;
 
 fn main() -> anyhow::Result<()> {
     color_backtrace::install();
     unsafe { std::env::set_var("RUST_LOG", "hats_plus_plus_editor=info,egui_glow=off,info") };
-    flexi_logger::Logger::try_with_env()?.start()?;
     let native_opts = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: egui::ViewportBuilder::default().with_inner_size((1600.0, 900.0)),

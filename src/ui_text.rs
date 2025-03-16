@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     English,
     Russian,
@@ -26,8 +26,8 @@ impl Translatable for str {
 
 #[derive(Debug)]
 pub struct UiText {
-    pub language: Language,
-    pub data: HashMap<String, HashMap<String, String>>,
+    language: Language,
+    data: HashMap<String, HashMap<String, String>>,
 }
 
 impl UiText {
@@ -38,21 +38,19 @@ impl UiText {
             data: json,
         }
     }
-    pub fn get<T: Translatable + ?Sized>(&self, translatable: &T) -> String {
+    pub fn get<T: Translatable + ?Sized>(&self, translatable: &T) -> &str {
         let key = translatable.translate_key();
         match self.language {
-            Language::English => self.data["en"]
-                .get(key)
-                .unwrap_or_else(|| {
-                    panic!("could not find a key for: en, {0}", key);
-                })
-                .clone(),
-            Language::Russian => self.data["ru"]
-                .get(key)
-                .unwrap_or_else(|| {
-                    panic!("could not find a key for: ru, {0}", key);
-                })
-                .clone(),
+            Language::English => self.data["en"].get(key).unwrap_or_else(|| {
+                panic!("could not find a key for: en, {0}", key);
+            }),
+            Language::Russian => self.data["ru"].get(key).unwrap_or_else(|| {
+                panic!("could not find a key for: ru, {0}", key);
+            }),
         }
+    }
+
+    pub fn language(&self) -> Language {
+        self.language
     }
 }

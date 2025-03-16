@@ -10,6 +10,8 @@ use anyhow::{Context as _, Result, bail};
 use downcast_rs::{Downcast, impl_downcast};
 use eframe::{glow, icon_data::from_png_bytes};
 use pixas::bitmap::Bitmap;
+use serde::{Deserialize, Serialize};
+use strum::IntoEnumIterator;
 use uuid::Uuid;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -20,11 +22,12 @@ use crate::{
         HatType, MAX_PETS, WalkingPetData, WearableData, WingsData,
     },
     image::Image,
+    path_utils::{LocalPath, LocalPathError},
     texture::Texture,
 };
 
 thread_local! {
-    static HAT_ID_COUNTER: Cell<u32> = const { Cell::new(0) };
+    static HAT_ID_COUNTER: Cell<u32> = const { Cell::new(1) };
 }
 
 pub fn hat_element_id() -> HatElementId {
@@ -34,7 +37,7 @@ pub fn hat_element_id() -> HatElementId {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Default)]
-pub struct HatElementId(u32);
+pub struct HatElementId(pub u32);
 
 pub struct HatViewMut<'a> {
     base: &'a mut HatBaseData,
@@ -206,8 +209,12 @@ hat_element_def!(WalkingPetHat, WalkingPetData);
 hat_element_def!(ExtraHat, ExtraHatData);
 
 pub trait LoadHatElement: Sized + HatElement {
-    type Data: serde::Serialize + serde::de::DeserializeOwned + Clone;
+    type Data: serde::Serialize + serde::de::DeserializeOwned + Clone + Default;
     fn load(data: Self::Data, image: Image, gl: &glow::Context) -> Result<Self>;
+    fn load_from_path(path: &Path, gl: &glow::Context) -> Result<Self> {
+        let image = Image::new(path).context(format!("could not load image at {:?}", &path))?;
+        Self::load(Self::Data::default(), image, gl)
+    }
 }
 
 macro_rules! impl_load_hat_element {
@@ -266,12 +273,26 @@ impl_load_hat_element!(@anims FlyingPet);
 impl_load_hat_element!(@anims WalkingPet);
 impl_load_hat_element!(@manual ExtraHat, ExtraHatData);
 
+#[derive(Debug, Clone, Copy, Hash, Default)]
+pub struct HatId(pub u32);
+
+thread_local! {
+    static FRAME_ID_COUNTER: Cell<u32> = const { Cell::new(0) };
+}
+
+pub fn hat_id() -> HatId {
+    let id = FRAME_ID_COUNTER.get();
+    FRAME_ID_COUNTER.set(id + 1);
+    HatId(id)
+}
+
 #[derive(Debug)]
 pub struct Hat {
     elements: HashMap<HatElementId, Box<dyn HatElement>>,
     path: PathBuf,
     name: String,
     name_set_by_user: bool,
+    id: HatId,
 }
 
 macro_rules! hat_by_type_def {
@@ -303,11 +324,24 @@ impl Hat {
             path: path.to_path_buf(),
             name: name.to_string(),
             name_set_by_user: false,
+            id: hat_id(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
+    }
+
+    pub fn element(&self, id: HatElementId) -> Option<&dyn HatElement> {
+        self.elements.get(&id).map(|e| &**e)
+    }
+
+    pub fn element_exists(&self, id: HatElementId) -> bool {
+        self.elements.contains_key(&id)
+    }
+
+    pub fn element_mut(&mut self, id: HatElementId) -> Option<&mut dyn HatElement> {
+        self.elements.get_mut(&id).map(|e| &mut **e)
     }
 
     pub fn elements(&self) -> impl Iterator<Item = &dyn HatElement> {
@@ -326,6 +360,10 @@ impl Hat {
         self.pets_amount() < MAX_PETS
     }
 
+    pub fn can_add_elements(&self) -> bool {
+        self.can_add_pets() && !HatType::iter().all(|hat_type| self.has_element(hat_type))
+    }
+
     pub fn add_element(&mut self, element: impl HatElement) {
         if element.is_pet() && !self.can_add_pets() {
             return;
@@ -336,13 +374,20 @@ impl Hat {
         self.elements.insert(element.id(), Box::new(element));
     }
 
+    pub fn remove_element(&mut self, element_id: HatElementId) {
+        self.elements.remove(&element_id);
+    }
+
     pub fn has_element(&self, hat_type: HatType) -> bool {
         self.elements().any(|e| e.base().hat_type == hat_type)
     }
 
+    pub fn has_element_with_id(&self, hat_id: HatElementId) -> bool {
+        self.elements().any(|e| e.id() == hat_id)
+    }
+
     pub fn load(path: impl AsRef<Path>, gl: &glow::Context) -> Result<Self> {
         let path = path.as_ref();
-        let src_path = path.join("src");
         let data_path = path.join("data.json");
         let images_path = path.join("images");
         for path in &[path, &images_path] {
@@ -351,25 +396,38 @@ impl Hat {
             }
         }
 
-        let data: HatData = File::open(&data_path)
-            .context(format!("could not open {:?}", &data_path))
-            .and_then(|mut file| {
-                let mut data = String::new();
-                file.read_to_string(&mut data)
-                    .context(format!("could not read {:?}", &data_path))
-                    .map(|_| data)
-            })
-            .and_then(|data_string| {
-                serde_json::from_str(&data_string)
-                    .context(format!("could not parse {:?}", &data_path))
-            })?;
+        let data: HatData = if data_path.exists() {
+            File::open(&data_path)
+                .context(format!("could not open {:?}", &data_path))
+                .and_then(|mut file| {
+                    let mut data = String::new();
+                    file.read_to_string(&mut data)
+                        .context(format!("could not read {:?}", &data_path))
+                        .map(|_| data)
+                })
+                .and_then(|data_string| {
+                    serde_json::from_str(&data_string)
+                        .context(format!("could not parse {:?}", &data_path))
+                })?
+        } else {
+            let mut file =
+                File::create(&data_path).context(format!("could not create {:?}", data_path))?;
+            let hat_data = HatData::new("Default".to_string());
+            write!(
+                file,
+                "{}",
+                serde_json::to_string_pretty(&hat_data).expect("should always succeed")
+            )
+            .context(format!("could not write into {:?}", &data_path))?;
+            hat_data
+        };
 
         let mut hat = Hat::new(path, &data.name);
         for element in data.elements {
             let local_image_path = element.base().local_image_path.as_ref().unwrap();
-            let image_path = images_path.join(local_image_path);
+            let image_path = path.join(local_image_path);
             let bitmap = Bitmap::from_path(&image_path)
-                .context(format!("couldn not read image at {:?}", &image_path))?;
+                .context(format!("could not read image at {:?}", &image_path))?;
 
             match element {
                 HatElementData::Wearable(wearable_data) => {
@@ -450,8 +508,10 @@ impl Hat {
     //     *self.path_mut() = path;
     //     Ok(())
     // }
-
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        if let Err(err) = self.check_files_integrity() {
+            bail!("failed files integrity check: {}", err.to_string());
+        }
         let path = path.as_ref().join("data.json");
         let uuid_path: PathBuf = {
             let mut path = path.to_path_buf().into_os_string();
@@ -483,50 +543,21 @@ impl Hat {
             .context(format!("could not rename file: {:?}", uuid_path))?;
         Ok(())
     }
-    //path: idk/what/hat/images/bitmap.png
-    //ancestors:
-    //1 idk/what/hat/images/bitmap.png
-    //2 idk/what/hat/images
-    //3 idk/what/hat
-    //idk/what
-    //idk
-    //
-    //components reved:
-    //1 bitmap.png
-    //2 images/bitmap.png
-    //3 hat/images/bitmap.png
-    //...
+
     pub fn gen_hat_data(&self, save_type: HatSaveType) -> HatData {
         let mut hat_data = HatData::new(self.name().to_string());
         for element in self.elements() {
             let local_image_path = match save_type {
                 HatSaveType::Folder => {
-                    //TODO: account for the situation where image is NOT in images
-                    let images_path = self.path().join("images");
-                    let is_in_images_dir = images_path.ancestors().any(|path| path == images_path);
-                    assert!(is_in_images_dir);
-
+                    //TODO: account for the situation where image is NOT in images - copy pngs
                     let image_path = element.bitmap().path().unwrap();
-                    let mut path_parts = vec![];
-                    for (component, ancestor) in
-                        images_path.components().rev().zip(images_path.ancestors())
-                    {
-                        path_parts.push(component.as_os_str().to_owned());
-                        if ancestor == images_path {
-                            break;
-                        }
+                    match image_path.local_path(self.path()) {
+                        Ok(path) => path,
+                        Err(LocalPathError::PathNotInDir) => todo!(),
                     }
-                    image_path
-                        .iter()
-                        .rev()
-                        .fold(PathBuf::new(), |mut path, part| {
-                            path.push(part);
-                            path
-                        })
                 }
                 HatSaveType::File => Path::new("images").join(format!("{}.png", element.id().0)),
             };
-            dbg!(&local_image_path);
             let mut element_data = element.hat_element_data_ref().to_hat_element_data();
             let base = element_data.base_mut();
             base.local_image_path = Some(local_image_path);
@@ -536,7 +567,34 @@ impl Hat {
         hat_data
     }
 
+    pub fn check_files_integrity(&self) -> Result<()> {
+        if !self.path().exists() {
+            bail!("{:?} does not exist", self.path());
+        }
+        for element in self.elements() {
+            if let Some(path) = &element.base().local_image_path {
+                let path = self.path().join(path);
+                if !path.exists() {
+                    bail!("{:?} does not exist", path);
+                }
+            }
+            if let Some(path) = &element.base().local_script_path
+                && !self.path().join(path).exists()
+            {
+                let path = self.path().join(path);
+                if !path.exists() {
+                    bail!("{:?} does not exist", path);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn export_to_file(&self, path: impl AsRef<Path>) -> Result<()> {
+        if let Err(err) = self.check_files_integrity() {
+            bail!("failed files integrity check: {}", err.to_string());
+        }
         let path = path.as_ref();
 
         let uuid_path: PathBuf = {
@@ -630,5 +688,9 @@ impl Hat {
 
     pub fn name_set_by_user_mut(&mut self) -> &mut bool {
         &mut self.name_set_by_user
+    }
+
+    pub fn id(&self) -> HatId {
+        self.id
     }
 }

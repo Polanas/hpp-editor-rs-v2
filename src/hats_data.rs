@@ -18,7 +18,7 @@ pub const MIN_FRAME_SIZE: i32 = 32;
 pub const MAX_FRAME_SIZE: i32 = 64;
 
 #[derive(
-    Copy, Clone, Debug, Default, PartialEq, Eq, Hash, FromPrimitive, Serialize, Deserialize,
+    Copy, Clone, Debug, Default, PartialEq, Eq, Hash, FromPrimitive, Serialize, Deserialize, strum::EnumIter
 )]
 //TODO: add preview back
 pub enum HatType {
@@ -57,6 +57,7 @@ pub struct HatBaseData {
     pub hat_type: HatType,
     pub frame_size: IVec2,
     pub local_image_path: Option<PathBuf>,
+    pub local_script_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -87,6 +88,7 @@ impl Default for WearableData {
                 hat_type: HatType::Wearable,
                 frame_size: IVec2::splat(MIN_FRAME_SIZE),
                 local_image_path: None,
+                local_script_path: None,
             },
             strapped_on: Default::default(),
             animations: Default::default(),
@@ -125,6 +127,7 @@ impl Default for WingsData {
                 hat_type: HatType::Wings,
                 frame_size: IVec2::splat(MIN_FRAME_SIZE),
                 local_image_path: None,
+                local_script_path: None,
             },
             animations: Default::default(),
         }
@@ -146,6 +149,7 @@ impl Default for FlyingPetData {
                 hat_type: HatType::FlyingPet,
                 frame_size: IVec2::splat(MIN_FRAME_SIZE),
                 local_image_path: None,
+                local_script_path: None,
             },
             pet_base: Default::default(),
             speed: Default::default(),
@@ -168,6 +172,7 @@ impl Default for WalkingPetData {
                 hat_type: HatType::WalkingPet,
                 frame_size: IVec2::splat(MIN_FRAME_SIZE),
                 local_image_path: None,
+                local_script_path: None,
             },
             pet_base: Default::default(),
             animations: Default::default(),
@@ -187,6 +192,7 @@ impl Default for ExtraHatData {
                 hat_type: HatType::WalkingPet,
                 frame_size: IVec2::splat(MIN_FRAME_SIZE),
                 local_image_path: None,
+                local_script_path: None,
             },
         }
     }
